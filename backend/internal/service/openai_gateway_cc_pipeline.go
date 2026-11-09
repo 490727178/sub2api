@@ -199,6 +199,8 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	grokCacheIdentity string,
 ) (*http.Response, error) {
 	body = normalizeGeminiChatCompletionsToolSchemas(body)
+	body = normalizeGeminiChatCompletionsToolResults(body)
+	body = clampGeminiChatCompletionsMaxTokens(body)
 	body = normalizeChatCompletionsReasoningEffort(body)
 	// DeepSeek thinking mode 要求历史 assistant 回传 reasoning_content。
 	// Responses→CC 回退在加密-only / 缺 reasoning item 且缓存未命中时会漏掉该
