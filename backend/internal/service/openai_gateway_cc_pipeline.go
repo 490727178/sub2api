@@ -16,6 +16,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -196,6 +198,8 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	userAgent string,
 	grokCacheIdentity string,
 ) (*http.Response, error) {
+	body = normalizeGeminiChatCompletionsToolSchemas(body)
+	body = normalizeChatCompletionsReasoningEffort(body)
 	// DeepSeek thinking mode 要求历史 assistant 回传 reasoning_content。
 	// Responses→CC 回退在加密-only / 缺 reasoning item 且缓存未命中时会漏掉该
 	// 字段，上游 400 "The `reasoning_content` in the thinking mode must be
@@ -272,6 +276,9 @@ type ccStreamScanState struct {
 	// 非 nil 时调用方必须跳过 finalize 并返回 usage-incomplete 错误，避免
 	// 把上游截断伪装成正常收尾。
 	Err error
+	// ErrorPayload 与 ErrorMessage 记录流中收到的错误事件 payload 及错误提示，供调用方对接错误透传。
+	ErrorPayload []byte
+	ErrorMessage string
 }
 
 // scanCCStream 驱动两条 CC 回退路径共享的 SSE 读循环：提取 data 行、在 [DONE]
@@ -321,6 +328,22 @@ func (s *OpenAIGatewayService) scanCCStream(
 				zap.String("request_id", requestID),
 			)
 			continue
+		}
+		if len(chunk.Choices) == 0 {
+			if gjson.GetBytes([]byte(payload), "error").Exists() || gjson.GetBytes([]byte(payload), "statusCode").Int() >= 400 {
+				errMsg := extractOpenAISSEErrorMessage([]byte(payload))
+				if errMsg == "" {
+					errMsg = "upstream stream returned error payload"
+				}
+				logger.L().Warn(logPrefix+": upstream stream returned error event",
+					zap.String("error_message", errMsg),
+					zap.String("request_id", requestID),
+				)
+				st.ErrorPayload = []byte(payload)
+				st.ErrorMessage = errMsg
+				st.Err = fmt.Errorf("upstream chat stream error: %s", errMsg)
+				break
+			}
 		}
 		if st.FirstTokenMs == nil && !isOpenAIChatUsageOnlyStreamChunk(payload) && chatChunkStartsResponsesOutput(&chunk) {
 			ms := int(time.Since(startTime).Milliseconds())
@@ -390,4 +413,20 @@ func writeOpenAIResponsesFallbackError(c *gin.Context, statusCode int, errType, 
 			"message": message,
 		},
 	})
+}
+
+func normalizeChatCompletionsReasoningEffort(body []byte) []byte {
+	res := gjson.GetBytes(body, "reasoning_effort")
+	if !res.Exists() || res.Type != gjson.String {
+		return body
+	}
+	effort := strings.ToLower(strings.TrimSpace(res.String()))
+	switch effort {
+	case "xhigh", "max", "ultra":
+		updated, err := sjson.SetBytes(body, "reasoning_effort", "high")
+		if err == nil {
+			return updated
+		}
+	}
+	return body
 }

@@ -228,3 +228,32 @@ func chatMessageRoles(messages []ChatMessage) []string {
 	}
 	return roles
 }
+
+func TestResponsesToChatCompletionsRequest_ReasoningEffortClampedToChatSupported(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"low", "low"},
+		{"medium", "medium"},
+		{"high", "high"},
+		{"xhigh", "high"},
+		{"max", "high"},
+		{"ultra", "high"},
+		{"MAX", "high"},
+		{" XHigh ", "high"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			req := &ResponsesRequest{
+				Model:     "gpt-4o",
+				Input:     json.RawMessage(`[{"role":"user","content":"hi"}]`),
+				Reasoning: &ResponsesReasoning{Effort: tt.in},
+			}
+			out, err := ResponsesToChatCompletionsRequest(req)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, out.ReasoningEffort)
+		})
+	}
+}

@@ -63,7 +63,7 @@ func ResponsesToChatCompletionsRequestWithOptions(req *ResponsesRequest, opts *R
 		ParallelToolCalls:   req.ParallelToolCalls,
 	}
 	if req.Reasoning != nil {
-		out.ReasoningEffort = req.Reasoning.Effort
+		out.ReasoningEffort = chatCompletionsReasoningEffort(req.Reasoning.Effort)
 	}
 	effectiveTools, err := EffectiveResponsesTools(req)
 	if err != nil {
@@ -172,6 +172,18 @@ func EffectiveResponsesTools(req *ResponsesRequest) ([]ResponsesTool, error) {
 		tools = append(tools, discovered...)
 	}
 	return tools, nil
+}
+
+// chatCompletionsReasoningEffort clamps Responses-only effort levels to the
+// values Chat Completions accepts. "max" and "xhigh" are Responses-only; some
+// upstreams (Gemini/LiteLLM/NewAPI style) hang until timeout and answer
+// 500 "Unknown error occurred" instead of rejecting the field.
+func chatCompletionsReasoningEffort(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "xhigh", "max", "ultra":
+		return "high"
+	}
+	return raw
 }
 
 // CustomToolNames 收集 Responses 请求中 custom/freeform 工具的名字。chat 桥回程时
