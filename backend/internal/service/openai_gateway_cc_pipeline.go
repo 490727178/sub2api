@@ -198,10 +198,11 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	userAgent string,
 	grokCacheIdentity string,
 ) (*http.Response, error) {
+	body = s.restoreGeminiChatCompletionsToolCallIDs(body)
 	body = normalizeGeminiChatCompletionsToolSchemas(body)
 	body = normalizeGeminiChatCompletionsToolResults(body)
 	body = clampGeminiChatCompletionsMaxTokens(body)
-	body = normalizeChatCompletionsReasoningEffort(body)
+	body = clampGeminiChatCompletionsReasoningEffort(body)
 	// DeepSeek thinking mode 要求历史 assistant 回传 reasoning_content。
 	// Responses→CC 回退在加密-only / 缺 reasoning item 且缓存未命中时会漏掉该
 	// 字段，上游 400 "The `reasoning_content` in the thinking mode must be
@@ -351,6 +352,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 			ms := int(time.Since(startTime).Milliseconds())
 			st.FirstTokenMs = &ms
 		}
+		s.shortenChatChunkToolCallIDs(&chunk)
 		emit(&chunk)
 	}
 
@@ -403,6 +405,7 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsed
 	}
+	s.shortenChatResponseToolCallIDs(&ccResp)
 	return &ccResp, usage, nil
 }
 
@@ -417,7 +420,14 @@ func writeOpenAIResponsesFallbackError(c *gin.Context, statusCode int, errType, 
 	})
 }
 
-func normalizeChatCompletionsReasoningEffort(body []byte) []byte {
+// clampGeminiChatCompletionsReasoningEffort 把 Responses 专属的推理强度
+// （xhigh/max/ultra）降为 high，仅对 Gemini 上游生效：Gemini（LiteLLM/NewAPI
+// 风格）遇到这些值会挂起约 31s 后回 500 "Unknown error occurred"。GLM、GPT 等
+// 原生支持这些档位的上游保持原值，避免被静默降档。
+func clampGeminiChatCompletionsReasoningEffort(body []byte) []byte {
+	if !isGeminiChatCompletionsModel(gjson.GetBytes(body, "model").String()) {
+		return body
+	}
 	res := gjson.GetBytes(body, "reasoning_effort")
 	if !res.Exists() || res.Type != gjson.String {
 		return body

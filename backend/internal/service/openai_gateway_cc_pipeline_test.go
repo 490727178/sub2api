@@ -7,7 +7,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestNormalizeChatCompletionsReasoningEffort(t *testing.T) {
+func TestClampGeminiChatCompletionsReasoningEffort(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
@@ -43,11 +43,26 @@ func TestNormalizeChatCompletionsReasoningEffort(t *testing.T) {
 			body: `{"model":"gemini-3.8-flash","reasoning_effort":"high","messages":[]}`,
 			want: "high",
 		},
+		{
+			name: "non-gemini glm keeps xhigh",
+			body: `{"model":"glm-5.2","reasoning_effort":"xhigh","messages":[]}`,
+			want: "xhigh",
+		},
+		{
+			name: "non-gemini gpt keeps max",
+			body: `{"model":"gpt-5.6-luna","reasoning_effort":"max","messages":[]}`,
+			want: "max",
+		},
+		{
+			name: "provider-prefixed gemini is not treated as gemini",
+			body: `{"model":"openai/gemini-3.8-flash","reasoning_effort":"max","messages":[]}`,
+			want: "max",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeChatCompletionsReasoningEffort([]byte(tt.body))
+			got := clampGeminiChatCompletionsReasoningEffort([]byte(tt.body))
 			effort := gjson.GetBytes(got, "reasoning_effort").String()
 			assert.Equal(t, tt.want, effort)
 		})
